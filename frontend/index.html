@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>宝可梦卡交易管理 MVP</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f7f9fc; margin: 0; }
+    header { background:#2b6cb0; color:white; padding: 14px 20px; font-weight:700; }
+    .container { padding: 20px; max-width: 1200px; margin:auto; }
+    .tabs { display:flex; gap:8px; margin-bottom:16px; }
+    .tab { border:1px solid #cfd8e3; background:white; padding:8px 12px; cursor:pointer; border-radius:8px; }
+    .tab.active { background:#2b6cb0; color:white; }
+    .panel { display:none; }
+    .panel.active { display:block; }
+    .card { background:white; border-radius:10px; padding:16px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+    .grid { display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+    input, select, button { padding:8px; border-radius:6px; border:1px solid #cfd8e3; }
+    button { background:#2b6cb0; color:white; border:none; cursor:pointer; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { text-align:left; border-bottom:1px solid #eee; padding:8px; }
+    .kpi { font-size: 22px; font-weight: 700; }
+    .muted { color:#667; font-size:12px; }
+  </style>
+</head>
+<body>
+<header>宝可梦卡交易管理 MVP</header>
+<div class="container">
+  <div class="tabs">
+    <button class="tab active" data-tab="entry">录入</button>
+    <button class="tab" data-tab="inventory">库存</button>
+    <button class="tab" data-tab="dashboard">利润看板</button>
+  </div>
+
+  <section id="entry" class="panel active">
+    <div class="card">
+      <h3>新增卡片</h3>
+      <div class="grid">
+        <input id="card_name" placeholder="卡名" />
+        <input id="card_code" placeholder="编号（可选）" />
+        <input id="set_name" placeholder="版本（可选）" />
+        <input id="rarity" placeholder="稀有度（可选）" />
+      </div>
+      <p><button onclick="createCard()">保存卡片</button></p>
+    </div>
+
+    <div class="card">
+      <h3>录入买入</h3>
+      <div class="grid">
+        <select id="buy_card_id"></select>
+        <input id="buy_qty" type="number" min="1" placeholder="数量" />
+        <input id="buy_cost" type="number" min="0" step="0.01" placeholder="单价" />
+        <input id="buy_source" placeholder="来源" />
+        <input id="buy_time" type="datetime-local" />
+      </div>
+      <p><button onclick="createPurchase()">保存买入</button></p>
+    </div>
+
+    <div class="card">
+      <h3>录入卖出</h3>
+      <div class="grid">
+        <select id="sell_card_id"></select>
+        <input id="sell_qty" type="number" min="1" placeholder="数量" />
+        <input id="sell_price" type="number" min="0" step="0.01" placeholder="卖出单价" />
+        <input id="sell_channel" placeholder="渠道（闲鱼/私聊）" />
+        <input id="sell_platform_fee" type="number" min="0" step="0.01" placeholder="平台费" />
+        <input id="sell_shipping_fee" type="number" min="0" step="0.01" placeholder="运费" />
+        <input id="sell_time" type="datetime-local" />
+      </div>
+      <p><button onclick="createSale()">保存卖出</button></p>
+      <pre id="sell_result" class="muted"></pre>
+    </div>
+  </section>
+
+  <section id="inventory" class="panel">
+    <div class="card">
+      <h3>库存列表</h3>
+      <p><button onclick="loadInventory()">刷新库存</button></p>
+      <table>
+        <thead><tr><th>卡名</th><th>剩余数量</th><th>库存成本</th></tr></thead>
+        <tbody id="inventory_body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="dashboard" class="panel">
+    <div class="card">
+      <h3>利润看板</h3>
+      <div class="grid">
+        <input id="report_start" type="date" />
+        <input id="report_end" type="date" />
+      </div>
+      <p><button onclick="loadProfit()">刷新报表</button></p>
+      <div class="grid">
+        <div><div class="muted">销售笔数</div><div id="kpi_sales_count" class="kpi">0</div></div>
+        <div><div class="muted">收入</div><div id="kpi_revenue" class="kpi">0</div></div>
+        <div><div class="muted">成本</div><div id="kpi_cost" class="kpi">0</div></div>
+        <div><div class="muted">利润</div><div id="kpi_profit" class="kpi">0</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>交易流水</h3>
+      <p><button onclick="loadTransactions()">刷新流水</button></p>
+      <table>
+        <thead><tr><th>时间</th><th>类型</th><th>卡名</th><th>数量</th><th>单价</th></tr></thead>
+        <tbody id="tx_body"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function switchTab(tabName) {
+  document.querySelectorAll('.tab').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tabName));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === tabName));
+}
+
+document.querySelectorAll('.tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+
+async function api(path, options={}) {
+  const res = await fetch(path, { headers: {'Content-Type':'application/json'}, ...options });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function loadCards() {
+  const cards = await api('/cards');
+  for (const id of ['buy_card_id', 'sell_card_id']) {
+    const sel = $(id);
+    sel.innerHTML = cards.map(c => `<option value="${c.id}">${c.card_name} (#${c.id})</option>`).join('');
+  }
+}
+
+async function createCard() {
+  await api('/cards', {
+    method:'POST',
+    body: JSON.stringify({
+      card_name: $('card_name').value,
+      card_code: $('card_code').value || null,
+      set_name: $('set_name').value || null,
+      rarity: $('rarity').value || null,
+    })
+  });
+  await loadCards();
+  alert('卡片已创建');
+}
+
+async function createPurchase() {
+  await api('/purchases', {
+    method:'POST',
+    body: JSON.stringify({
+      card_id: Number($('buy_card_id').value),
+      qty: Number($('buy_qty').value),
+      unit_cost: Number($('buy_cost').value),
+      source: $('buy_source').value || null,
+      purchased_at: new Date($('buy_time').value).toISOString()
+    })
+  });
+  alert('买入已录入');
+}
+
+async function createSale() {
+  const result = await api('/sales', {
+    method:'POST',
+    body: JSON.stringify({
+      sold_at: new Date($('sell_time').value).toISOString(),
+      channel: $('sell_channel').value || null,
+      shipping_fee: Number($('sell_shipping_fee').value || 0),
+      platform_fee: Number($('sell_platform_fee').value || 0),
+      items: [{
+        card_id: Number($('sell_card_id').value),
+        qty: Number($('sell_qty').value),
+        unit_price: Number($('sell_price').value)
+      }]
+    })
+  });
+  $('sell_result').textContent = JSON.stringify(result, null, 2);
+  alert('卖出已录入');
+}
+
+async function loadInventory() {
+  const data = await api('/inventory');
+  $('inventory_body').innerHTML = data.map(r => `<tr><td>${r.card_name}</td><td>${r.qty_remaining}</td><td>${r.inventory_cost}</td></tr>`).join('');
+}
+
+async function loadProfit() {
+  const start = $('report_start').value;
+  const end = $('report_end').value;
+  const query = new URLSearchParams();
+  if (start) query.set('start', start);
+  if (end) query.set('end', end);
+  const data = await api(`/reports/profit?${query.toString()}`);
+  $('kpi_sales_count').textContent = data.sales_count;
+  $('kpi_revenue').textContent = data.revenue;
+  $('kpi_cost').textContent = data.cost;
+  $('kpi_profit').textContent = data.profit;
+}
+
+async function loadTransactions() {
+  const data = await api('/transactions');
+  $('tx_body').innerHTML = data.map(r => `<tr><td>${r.occurred_at}</td><td>${r.type}</td><td>${r.card_name}</td><td>${r.qty}</td><td>${r.unit_price}</td></tr>`).join('');
+}
+
+(function init() {
+  const now = new Date();
+  const isoLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+  $('buy_time').value = isoLocal;
+  $('sell_time').value = isoLocal;
+  $('report_start').value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
+  $('report_end').value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  loadCards().catch(()=>{});
+})();
+</script>
+</body>
+</html>
